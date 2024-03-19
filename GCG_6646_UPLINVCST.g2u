@@ -1,0 +1,840 @@
+﻿Program.Sub.ScreenSU.Start
+Gui.FormSelectCost..Create
+Gui.FormSelectCost..Caption("Select Cost to Update")
+Gui.FormSelectCost..Size(4725,2520)
+Gui.FormSelectCost..MinX(0)
+Gui.FormSelectCost..MinY(0)
+Gui.FormSelectCost..Position(0,0)
+Gui.FormSelectCost..BackColor(-2147483633)
+Gui.FormSelectCost..MousePointer(0)
+Gui.FormSelectCost..Event(UnLoad,FormSelectCost_UnLoad)
+Gui.FormSelectCost.ddlOption.Create(DropDownList)
+Gui.FormSelectCost.ddlOption.Size(3465,330)
+Gui.FormSelectCost.ddlOption.Position(480,525)
+Gui.FormSelectCost.lbl1.Create(Label,"Select an Option:",True,1935,255,0,435,270,True,0,"Arial",8,-2147483633,0)
+Gui.FormSelectCost.cmdUpdateCost.Create(Button)
+Gui.FormSelectCost.cmdUpdateCost.Size(1200,375)
+Gui.FormSelectCost.cmdUpdateCost.Position(720,1305)
+Gui.FormSelectCost.cmdUpdateCost.Caption("Update Cost")
+Gui.FormSelectCost.cmdUpdateCost.Event(Click,cmdUpdateCost_Click)
+Gui.FormSelectCost.cmd1.Create(Button)
+Gui.FormSelectCost.cmd1.Size(855,375)
+Gui.FormSelectCost.cmd1.Position(2865,1305)
+Gui.FormSelectCost.cmd1.Caption("Cancel")
+Gui.FormSelectCost.cmd1.DefaultValue("")
+Gui.FormSelectCost.cmd1.Event(Click,Unload)
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+v.Global.sPart.Declare(String)
+v.Global.fCostNew.Declare(Float)
+v.Global.fCostOld.Declare(Float)
+v.Global.fAltCostOld.Declare(Float)
+v.Global.fPrice.Declare(Float)
+v.Global.bValidPart.Declare(Boolean,True)
+v.Global.bCostUpdate.Declare(Boolean,True)
+v.Global.bCostAudit.Declare(Boolean,True)
+v.Global.bUpdateMatCost.Declare(Boolean, True)
+v.Global.bUpdateAltCost.Declare(Boolean, True)
+v.Global.sFile.Declare(String)
+Program.Sub.Preflight.End
+'ARC#6646
+'	2022, Nam Le
+
+'UNIVERSAL METAL PRODUCTS does a quarterly update on the cost of their raw materials. They
+'are currently using standard cost with inventory transactional accounting. They have an excel
+'spreadsheet that they would use as the source data for an upload process. The process would need
+'to update both the cost and alt_costs values for the items listed in the spreadsheet. Since they are on
+'transactional accounting, updating the "cost" would require an inventory_audit record to be created as
+'well. This audit record would be the cost adjustment that gets posted to the general ledger when the
+'inventory batch gets posted.
+
+'This script receive a file from browsing and upload the new cost to GSS
+'!!! This program does not handle part with LOCATION/Multiple LOCATION !!! 
+'UMP does not use LOCATION for their PART
+
+Program.Sub.Main.Start
+f.Intrinsic.Control.Try
+	v.Local.sRet.Declare(String)
+	v.Local.sSQL.Declare(String)
+	v.Local.sLines.Declare(String)
+	v.Local.bInString.Declare(Boolean)
+	v.Local.bExists.Declare(Boolean)
+	v.Local.iCounter.Declare(Long)
+	v.Local.sTemp.Declare(String)
+	v.Local.sMessage.Declare(String)
+	
+
+	
+	'Browse file
+	'--------------------------------------------------
+	f.Intrinsic.UI.ShowOpenFileDialog("", "*.xls", "", v.Global.sFile)
+	'Validations
+	'CANCEL
+	f.Intrinsic.Control.If(v.Global.sFile,=,"***CANCEL***")
+		'unload
+		f.Intrinsic.Control.CallSub(Unload)
+	f.Intrinsic.Control.EndIf
+	
+	'File Exists
+	f.Intrinsic.File.Exists(v.Global.sFile, v.Local.bExists)
+	f.Intrinsic.Control.If(v.Local.bExists,=,False)
+		f.Intrinsic.UI.Msgbox("File does not exists.")
+		f.Intrinsic.Control.CallSub(Unload)
+	f.Intrinsic.Control.EndIf
+	
+	'Extension
+	f.Intrinsic.String.IsInString(v.Global.sFile, ".xls", True, v.Local.bInString)
+	
+	f.Intrinsic.Control.If(v.Local.bInString,=,False)
+		f.Intrinsic.UI.Msgbox("Invalid file. Must be MS Excel.")
+		f.Intrinsic.Control.CallSub(Unload)
+	f.Intrinsic.Control.EndIf
+	'--------------------------------------------------
+	
+	
+	
+	'show form for choosing cost
+	'--------------------------------------------------
+	gui.FormSelectCost.ddlOption.AddItem("Both Material Cost and Alt Cost")
+	gui.FormSelectCost.ddlOption.AddItem("Material Cost only")
+	gui.FormSelectCost.ddlOption.AddItem("Alt Cost only")
+	gui.FormSelectCost.ddlOption.Text("Both Material Cost and Alt Cost")
+	gui.FormSelectCost..Show
+	'--------------------------------------------------
+	
+	
+f.Intrinsic.Control.Catch
+	f.Intrinsic.Control.CallSub(Catching)
+f.Intrinsic.Control.EndTry
+
+Program.Sub.Main.End
+
+'Find old cost, alt cost, price of a part
+Program.Sub.GetOldCost.Start
+f.Intrinsic.Control.Try
+	v.Local.sSQL.Declare(String)
+	v.Local.sRet.Declare(String)
+	
+	'get OldCost
+	f.Intrinsic.String.Build("select AMT_COST,AMT_ALT_COST, AMT_PRICE from V_INVENTORY_MSTR where RTRIM(PART)='{0}'", v.Global.sPart.PSQLFriendly, v.Local.sSQL)
+	f.ODBC.Connection!Con.OpenCompanyConnection
+		v.Local.sRet.Set("")
+		f.ODBC.Connection!Con.ExecuteAndReturn(v.Local.sSQL, v.Local.sRet)
+	f.ODBC.Connection!Con.Close
+	 
+	f.Intrinsic.Control.If(v.Ambient.ExecuteAndReturnEOF)
+		v.Global.bValidPart.Set(False)
+	f.Intrinsic.Control.Else
+		f.Intrinsic.String.Split(v.Local.sRet,"*!*", v.Local.sRet)
+		v.Global.fCostOld.Set(v.Local.sRet(0))
+		v.Global.fAltCostOld.Set(v.Local.sRet(1))
+		v.Global.fPrice.Set(v.Local.sRet(2))
+	f.Intrinsic.Control.EndIf
+	
+f.Intrinsic.Control.Catch
+	v.Global.bValidPart.Set(False)
+	f.Intrinsic.Control.CallSub(Catching)
+f.Intrinsic.Control.EndTry
+Program.Sub.GetOldCost.End
+
+'Update cost and alt cost in INVENTORY_MSTR and INVENTORY_COST
+Program.Sub.UpdateINVMSTR_INVCOST.Start
+f.Intrinsic.Control.Try
+	v.Local.sSQL.Declare(String)
+	v.Local.sRet.Declare(String)
+	v.Local.iCount.Declare(String)
+	
+	f.ODBC.Connection!Con.OpenCompanyConnection
+	
+	'INVENTORY_MSTR
+	'--------------------------------------------------
+	'Both costs
+	f.Intrinsic.Control.If(v.Global.bUpdateAltCost,=,True,"AND",v.Global.bUpdateMatCost,=,True)
+		f.Intrinsic.String.Build("update INVENTORY_MSTR set AMT_COST={0}, AMT_ALT_COST={0} where RTRIM(PART)='{1}'", v.Global.fCostNew, v.Global.sPart.PSQLFriendly, v.Local.sSQL)
+		f.ODBC.Connection!Con.Execute(v.Local.sSQL)
+	f.Intrinsic.Control.EndIf
+	
+	'Material only
+		f.Intrinsic.Control.If(v.Global.bUpdateAltCost,=,False,"AND",v.Global.bUpdateMatCost,=,True)
+		f.Intrinsic.String.Build("update INVENTORY_MSTR set AMT_COST={0} where RTRIM(PART)='{1}'", v.Global.fCostNew, v.Global.sPart.PSQLFriendly, v.Local.sSQL)
+		f.ODBC.Connection!Con.Execute(v.Local.sSQL)
+	f.Intrinsic.Control.EndIf
+	
+	'Alt cost only
+		f.Intrinsic.Control.If(v.Global.bUpdateAltCost,=,True,"AND",v.Global.bUpdateMatCost,=,False)
+		f.Intrinsic.String.Build("update INVENTORY_MSTR set AMT_ALT_COST={0} where RTRIM(PART)='{1}'", v.Global.fCostNew, v.Global.sPart.PSQLFriendly, v.Local.sSQL)
+		f.ODBC.Connection!Con.Execute(v.Local.sSQL)
+	f.Intrinsic.Control.EndIf
+	
+	'--------------------------------------------------
+	
+	'INVENTORY_COST
+	'only when v.Global.bUpdateMatCost,=,True
+	f.Intrinsic.Control.If(v.Global.bUpdateMatCost,=,True)
+		f.Intrinsic.String.Build("update INVENTORY_COST set COST={0}, MATL={0} where RTRIM(PART)='{1}'", v.Global.fCostNew, v.Global.sPart.PSQLFriendly, v.Local.sSQL)
+		f.ODBC.Connection!Con.Execute(v.Local.sSQL)
+	f.Intrinsic.Control.EndIf
+	
+	f.ODBC.Connection!Con.Close
+	
+f.Intrinsic.Control.Catch
+	v.Global.bCostUpdate.Set(False)
+	f.Intrinsic.Control.CallSub(Catching)
+f.Intrinsic.Control.EndTry
+Program.Sub.UpdateINVMSTR_INVCOST.End
+
+'Insert records into HIST tables
+'INVENTORY_AUDIT
+'INVENTORY_HIST
+'ALT_COST_HIST
+Program.Sub.InsertAUDIT_HIST_ALTCOST.Start
+f.Intrinsic.Control.Try
+	v.Local.sSQL.Declare(String)
+	v.Local.sRet.Declare(String)
+	v.Local.iCounter.Declare(String)
+	v.Local.sMessage.Declare(String)
+	
+	'ALT_COST_HIST
+	v.Local.sDATE_CHG.Declare(String)
+	v.Local.sTIME_CHG.Declare(String)
+	v.Local.sPROGRAM.Declare(String)
+	
+	'INVENTORY_AUDIT
+	v.Local.sDATE_AUDIT.Declare(String)
+	v.Local.sREFERENCE_1.Declare(String,"VALUE ONLY")
+	v.Local.fOnHand.Declare(Float,0)
+	v.Local.fOnBin.Declare(Float,0)
+	v.Local.fCostDif.Declare(Float,0)
+	v.Local.fTotalDif.Declare(Float,0)
+	v.Local.sBin.Declare(String)
+	v.Local.fCost.Declare(Float,0)
+	v.Local.fMATL_Cost.Declare(Float,0)
+	v.Local.sPL.Declare(String)
+	v.Local.sDATE_ACTION.Declare(String)
+	v.Local.bIgnoreForUsage.Declare(Boolean, False)
+	v.Local.bCostNotUpdate.Declare(Boolean, False)
+	
+	'INVENTORY_HIST
+	v.Local.sACCT_YR.Declare(String)
+	v.Local.sACCT_MO.Declare(String)
+	v.Local.sDATE_HISTORY.Declare(String)
+	v.Local.INV_HIST_TIME.Declare(String)
+	v.Local.dTemp.Declare(Date)
+	
+	
+	f.Intrinsic.String.Format(v.Ambient.Now, "YYYYMMDD", v.Local.sDATE_CHG)
+	f.Intrinsic.String.Format(v.Ambient.Now, "YYMMDD", v.Local.sDATE_AUDIT)
+	f.Intrinsic.String.Format(v.Ambient.Now,"HHMMSSSS", v.Local.sTIME_CHG)
+	f.Intrinsic.String.Format(v.Ambient.Now, "MMDDYY", v.Local.sDATE_ACTION)
+	f.Intrinsic.String.Format(v.Ambient.Now, "YYMMDD", v.Local.sDATE_HISTORY)
+	f.Intrinsic.String.Format(v.Ambient.Now,"HHMMSSSS", v.Local.INV_HIST_TIME)
+	f.Intrinsic.String.Format(v.Ambient.Now, "YY", v.Local.sACCT_YR)
+	f.Intrinsic.String.Format(v.Ambient.Now, "MM", v.Local.sACCT_MO)
+	
+	v.Local.sPROGRAM.Set("GCG_6646")
+	f.Intrinsic.Math.Sub(v.Global.fCostNew, v.Global.fCostOld, v.Local.fMATL_Cost)
+	
+	f.ODBC.Connection!Con.OpenCompanyConnection
+	
+	'ALT_COST_HIST
+	'--------------------------------------------------
+	'both
+	f.Intrinsic.Control.If(v.Global.bUpdateAltCost,=,True, "AND", v.Global.bUpdateMatCost,=,True)
+		f.Intrinsic.String.Build("insert into ALT_COST_HIST (PART, DATE_CHG, TIME_CHG, ALT_COST, PROGRAM, HST_USER, COST, VAL_CHGD, PRICE) values('{0}','{1}','{2}',{3},'{4}','{5}',{3},4,{6})", v.Global.sPart.PSQLFriendly, v.Local.sDATE_CHG, v.Local.sTIME_CHG, v.Global.fCostNew, v.Local.sPROGRAM, v.Caller.User, v.Global.fPrice, v.Local.sSQL)
+		f.ODBC.Connection!Con.Execute(v.Local.sSQL)
+	f.Intrinsic.Control.EndIf
+	
+	'mat only
+	f.Intrinsic.Control.If(v.Global.bUpdateAltCost,=,False, "AND", v.Global.bUpdateMatCost,=,True)
+		f.Intrinsic.String.Build("insert into ALT_COST_HIST (PART, DATE_CHG, TIME_CHG, ALT_COST, PROGRAM, HST_USER, COST, VAL_CHGD, PRICE) values('{0}','{1}','{2}',{3},'{4}','{5}',{6},2,{7})", v.Global.sPart.PSQLFriendly, v.Local.sDATE_CHG, v.Local.sTIME_CHG, v.Global.fAltCostOld, v.Local.sPROGRAM, v.Caller.User, v.Global.fCostNew,v.Global.fPrice, v.Local.sSQL)
+		f.ODBC.Connection!Con.Execute(v.Local.sSQL)
+	f.Intrinsic.Control.EndIf
+	
+	'alt only
+	f.Intrinsic.Control.If(v.Global.bUpdateAltCost,=,True, "AND", v.Global.bUpdateMatCost,=,False)
+		f.Intrinsic.String.Build("insert into ALT_COST_HIST (PART, DATE_CHG, TIME_CHG, ALT_COST, PROGRAM, HST_USER, COST, VAL_CHGD, PRICE) values('{0}','{1}','{2}',{3},'{4}','{5}',{6},1,{7})", v.Global.sPart.PSQLFriendly, v.Local.sDATE_CHG, v.Local.sTIME_CHG, v.Global.fCostNew, v.Local.sPROGRAM, v.Caller.User, v.Global.fCostOld, v.Global.fPrice, v.Local.sSQL)
+		f.ODBC.Connection!Con.Execute(v.Local.sSQL)
+	f.Intrinsic.Control.EndIf
+	'--------------------------------------------------
+	
+	'INVENTORY_AUDIT 'INVENTORY_HIST
+	'only when v.Global.bUpdateMatCost = True
+	'calculate fCost
+	'--------------------------------------------------
+	f.Intrinsic.Control.If(v.Global.bUpdateMatCost,=,False)
+		f.ODBC.Connection!Con.Close
+		f.Intrinsic.Control.ExitSub
+	f.Intrinsic.Control.EndIf
+	
+	f.Intrinsic.String.Build("select ISNULL(SUM(ISNULL(QUANTITY,0)),0) from V_ITEM_MASTER where RTRIM(PART)='{0}'", v.Global.sPart.PSQLFriendly, v.Local.sSQL)
+	v.Local.fOnHand.Set(0)
+	f.ODBC.Connection!Con.ExecuteAndReturn(v.Local.sSQL, v.Local.fOnHand)
+	
+	'get default Bin, PL
+	f.Intrinsic.String.Build("select PRODUCT_LINE, BIN from V_INVENTORY_MSTR where RTRIM(PART)='{0}'", v.Global.sPart, v.Local.sSQL)
+	v.Local.sRet.Set("")
+	f.ODBC.Connection!Con.ExecuteAndReturn(v.Local.sSQL, v.Local.sRet)
+	f.Intrinsic.Control.If(v.Local.sRet,!=,"")
+		f.Intrinsic.String.Split(v.Local.sRet, "*!*", v.Local.sRet)
+		v.Local.sPL.Set(v.Local.sRet(0))
+		v.Local.sBin.Set(v.Local.sRet(1))
+	f.Intrinsic.Control.EndIf
+	
+	'==========CASE 1
+	'Qty = 0
+	f.Intrinsic.Control.If(v.Local.fOnHand,=,0)
+		v.Local.fCost.Set(0.0)
+		f.Intrinsic.String.Format(v.Ambient.Now,"HHMMSSSS", v.Local.sTIME_CHG)
+		
+		'INVENTORY_AUDIT
+		'***************
+		f.Intrinsic.Control.If(v.DataTable.dtINVENTORY_AUDIT.Exists)
+			f.Data.DataTable.Close("dtINVENTORY_AUDIT")
+		f.Intrinsic.Control.EndIf
+		f.Data.DataTable.Create("dtINVENTORY_AUDIT")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "PART", "String", v.Global.sPart)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "DATE_AUDIT", "String", v.Local.sDATE_AUDIT)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "DATE_ACTION", "String", v.Local.sDATE_ACTION)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "AUDIT_TIME", "String", v.Local.sTIME_CHG)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "CODE_TRANSACTION", "String", "P18")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "REFERENCE_1", "String", "VALUE ONLY")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_ONHAND", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_ONHAND", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_INV_COST", "Float", v.Global.fCostOld)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_INV_COST", "Float", v.Global.fCostNew)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "BIN", "String", v.Local.sBin)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "QUANTITY", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "COST", "Float", v.Local.fCost)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "JOB_SEQ", "String", "000000")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "PRODUCT_LINE", "String", v.Local.sPL)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "AUDIT_PROGRAM", "String", v.Local.sPROGRAM)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "IGNORE_FOR_USAGE", "Boolean", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "AUDIT_USER", "String", v.Caller.User)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "MATL_COST", "Float", v.Local.fMATL_Cost)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_MATL", "Float", v.Global.fCostOld)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_MATL", "Float", v.Global.fCostNew)
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "COST_NOT_UPDATED", "Boolean", "0")
+		'default values
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "LABOR_COST", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OVERHEAD_COST", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OUTSIDE_COST", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "FREIGHT_COST", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OTHER_COST", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "MATL_VAR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "LABOR_VAR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OVERHEAD_VAR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OUTS_VAR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OTH_VAR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_LABR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_OVHD", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_OUTS", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_FREIGHT", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_OTHER", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_LABR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_OVHD", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_OUTS", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_FREIGHT", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_OTHER", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "DTL_KEY_SEQ", "Long", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "T10_FRGT", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "FRGT_VAR", "Float", "0")
+		
+		'insert record
+		f.Data.DataTable.AddRow("dtINVENTORY_AUDIT", "FRGT_VAR", 0)
+		f.Data.DataTable.SaveToDB("dtINVENTORY_AUDIT", "Con", "INVENTORY_AUDIT", "PART*!*AUDIT_TIME*!*BIN", 128)
+		f.Data.DataTable.Close("dtINVENTORY_AUDIT")
+	
+		
+		'INVENTORY_HIST
+		'**************
+		f.Intrinsic.Control.If(v.DataTable.dtINVENTORY_HIST.Exists)
+			f.Data.DataTable.Close("dtINVENTORY_HIST")
+		f.Intrinsic.Control.EndIf
+		f.Intrinsic.String.Format(v.Ambient.Now,"HHMMSSSS", v.Local.INV_HIST_TIME)
+		
+		f.Data.DataTable.Create("dtINVENTORY_HIST")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DATE_ACCT_YR", "String", v.Local.sACCT_YR)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DATE_ACCT_MO", "String", v.Local.sACCT_MO)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "PART", "String", v.Global.sPart)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DATE_HISTORY", "String", v.Local.sDATE_HISTORY)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "INV_HIST_TIME", "String", v.Local.INV_HIST_TIME)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "CODE_TRANSACTION", "String", "P18")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "TRANSACTION_DESC", "String", "VALUE ONLY")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_ONHAND", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_ONHAND", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_INV_COST", "Float", v.Global.fCostOld)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_INV_COST", "Float", v.Global.fCostNew)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "BIN", "String", v.Local.sBin)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "QUANTITY", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST", "Float", v.Local.fCost)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "SEQ", "String", "000000")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "PRODUCT_LINE", "String", v.Local.sPL)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DATE_ACTION", "String", v.Local.sDATE_ACTION)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "PROGRAM_A", "String", v.Local.sPROGRAM)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "IGNORE_FOR_USAGE", "Boolean", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "USERID", "String", v.Caller.User)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST_MATERIAL", "Float", v.Local.fMATL_Cost)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_MATL", "Float", v.Global.fCostOld)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_MATL", "Float", v.Global.fCostNew)
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST_NOT_UPD", "Boolean", "0")
+		'default values
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST_LABOR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST_OVERHEAD", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OUTS_COST", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "FREIGHT_COST", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OTHER_COST", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "MATL_VAR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "LABR_VAR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OVHD_VAR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OUTS_VAR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "FRGT_VAR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OTH_VAR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_LABR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_OVHD", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_OUTS", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_FRGT", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_OTH", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_LABR", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_OVHD", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_OUTS", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_FRGT", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_OTH", "Float", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DTL_KEY_SEQ", "Long", "0")
+		f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "T10_FRGT", "Float", "0")
+		'insert record
+		f.Data.DataTable.AddRow("dtINVENTORY_HIST", "T10_FRGT","0")
+		f.Data.DataTable.SaveToDB("dtINVENTORY_HIST", "Con", "INVENTORY_HIST", "PART*!*INV_HIST_TIME*!*BIN", 128)
+		f.Data.DataTable.Close("dtINVENTORY_HIST")
+	
+	
+	'==========CASE 2
+	'Qty <> 0
+	'check in Bin
+	f.Intrinsic.Control.Else
+		
+		'count number of bin
+		v.Local.sRet.Set("")
+		f.Intrinsic.String.Build("select count(1) from V_ITEM_MASTER where RTRIM(PART)='{0}' group by PART", v.Global.sPart.PSQLFriendly, v.Local.sSQL)
+		f.ODBC.Connection!Con.ExecuteAndReturn(v.Local.sSQL, v.Local.sRet)
+		
+		'not in bin
+		f.Intrinsic.Control.If(v.Local.sRet,=,0)
+		'log and exit
+			f.Intrinsic.Control.ExitSub
+		
+		
+	'==========CASE 2A
+		'in 1 bin
+		f.Intrinsic.Control.ElseIf(v.Local.sRet,=,1)
+			'insert 1 record
+			f.Intrinsic.String.Build("select RTRIM(BIN) from V_ITEM_MASTER where RTRIM(PART)='{0}' group by BIN", v.Global.sPart.PSQLFriendly, v.Local.sSQL)
+			f.ODBC.Connection!Con.ExecuteAndReturn(v.Local.sSQL, v.Local.sBin)
+			
+			f.Intrinsic.Math.Mult(v.Local.fOnHand, v.Local.fMATL_Cost, v.Local.fCost)
+			f.Intrinsic.String.Format(v.Ambient.Now,"HHMMSSSS", v.Local.sTIME_CHG)
+			
+			'INVENTORY_AUDIT
+			'**************
+			f.Intrinsic.Control.If(v.DataTable.dtINVENTORY_AUDIT.Exists)
+				f.Data.DataTable.Close("dtINVENTORY_AUDIT")
+			f.Intrinsic.Control.EndIf
+			f.Data.DataTable.Create("dtINVENTORY_AUDIT")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "PART", "String", v.Global.sPart)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "DATE_AUDIT", "String", v.Local.sDATE_AUDIT)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "DATE_ACTION", "String", v.Local.sDATE_ACTION)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "AUDIT_TIME", "String", v.Local.sTIME_CHG)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "CODE_TRANSACTION", "String", "P18")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "REFERENCE_1", "String", "VALUE ONLY")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_ONHAND", "Float", v.Local.fOnHand)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_ONHAND", "Float", v.Local.fOnHand)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_INV_COST", "Float", v.Global.fCostOld)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_INV_COST", "Float", v.Global.fCostNew)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "BIN", "String", v.Local.sBin)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "QUANTITY", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "COST", "Float", v.Local.fCost)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "JOB_SEQ", "String", "000000")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "PRODUCT_LINE", "String", v.Local.sPL)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "AUDIT_PROGRAM", "String", v.Local.sPROGRAM)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "IGNORE_FOR_USAGE", "Boolean", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "AUDIT_USER", "String", v.Caller.User)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "MATL_COST", "Float", v.Local.fMATL_Cost)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_MATL", "Float", v.Global.fCostOld)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_MATL", "Float", v.Global.fCostNew)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "COST_NOT_UPDATED", "Boolean", "0")
+			'default values
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "LABOR_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OVERHEAD_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OUTSIDE_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "FREIGHT_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OTHER_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "MATL_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "LABOR_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OVERHEAD_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OUTS_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OTH_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_LABR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_OVHD", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_OUTS", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_FREIGHT", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_OTHER", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_LABR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_OVHD", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_OUTS", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_FREIGHT", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_OTHER", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "DTL_KEY_SEQ", "Long", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "T10_FRGT", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "FRGT_VAR", "Float", "0")
+			
+			'insert record
+			f.Data.DataTable.AddRow("dtINVENTORY_AUDIT", "FRGT_VAR", 0)
+			f.Data.DataTable.SaveToDB("dtINVENTORY_AUDIT", "Con", "INVENTORY_AUDIT", "PART*!*AUDIT_TIME*!*BIN", 128)
+			f.Data.DataTable.Close("dtINVENTORY_AUDIT")
+			
+			
+			
+			'INVENTORY_HIST
+			'**************
+			f.Intrinsic.Control.If(v.DataTable.dtINVENTORY_HIST.Exists)
+				f.Data.DataTable.Close("dtINVENTORY_HIST")
+			f.Intrinsic.Control.EndIf
+			f.Intrinsic.String.Format(v.Ambient.Now,"HHMMSSSS", v.Local.INV_HIST_TIME)
+			
+			f.Data.DataTable.Create("dtINVENTORY_HIST")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DATE_ACCT_YR","String", v.Local.sACCT_YR)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DATE_ACCT_MO","String", v.Local.sACCT_MO)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "PART","String", v.Global.sPart)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DATE_HISTORY","String", v.Local.sDATE_HISTORY)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "INV_HIST_TIME","String", v.Local.INV_HIST_TIME)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "CODE_TRANSACTION","String", "P18")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "TRANSACTION_DESC","String", "VALUE ONLY")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_ONHAND", "Float", v.Local.fOnHand)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_ONHAND", "Float", v.Local.fOnHand)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_INV_COST", "Float", v.Global.fCostOld)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_INV_COST", "Float", v.Global.fCostNew)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "BIN", "String", v.Local.sBin)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "QUANTITY", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST", "Float", v.Local.fCost)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "SEQ", "String", "000000")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "PRODUCT_LINE", "String", v.Local.sPL)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DATE_ACTION", "String", v.Local.sDATE_ACTION)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "PROGRAM_A", "String", v.Local.sPROGRAM)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "IGNORE_FOR_USAGE", "Boolean", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "USERID", "String", v.Caller.User)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST_MATERIAL", "Float", v.Local.fMATL_Cost)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_MATL", "Float", v.Global.fCostOld)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_MATL", "Float", v.Global.fCostNew)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST_NOT_UPD", "Boolean", "0")
+			'default values
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST_LABOR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST_OVERHEAD", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OUTS_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "FREIGHT_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OTHER_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "MATL_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "LABR_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OVHD_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OUTS_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "FRGT_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OTH_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_LABR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_OVHD", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_OUTS", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_FRGT", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_OTH", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_LABR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_OVHD", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_OUTS", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_FRGT", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_OTH", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DTL_KEY_SEQ", "Long", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "T10_FRGT", "Float", "0")
+			'insert record
+			f.Data.DataTable.AddRow("dtINVENTORY_HIST", "T10_FRGT","0")
+			f.Data.DataTable.SaveToDB("dtINVENTORY_HIST", "Con", "INVENTORY_HIST", "PART*!*INV_HIST_TIME*!*BIN", 128)
+			f.Data.DataTable.Close("dtINVENTORY_HIST")
+			
+	'==========CASE 2B
+		'in multiple bin
+		'insert 1 record per bin
+		f.Intrinsic.Control.Else
+			v.Local.fCost.Set(0)
+			f.Intrinsic.String.Build("select BIN, SUM(QUANTITY) QUANTITY from V_ITEM_MASTER where RTRIM(PART)='{0}' group by BIN", v.Global.sPart.PSQLFriendly, v.Local.sSQL)
+			f.Intrinsic.Control.If(v.DataTable.dtPARTBIN.Exists)
+				f.Data.DataTable.Close("dtPARTBIN")
+			f.Intrinsic.Control.EndIf
+			f.Data.DataTable.CreateFromSQL("dtPARTBIN", "Con", v.Local.sSQL, True)
+			
+			'INVENTORY_AUDIT
+			'**************
+			f.Intrinsic.Control.If(v.DataTable.dtINVENTORY_AUDIT.Exists)
+					f.Data.DataTable.Close("dtINVENTORY_AUDIT")
+			f.Intrinsic.Control.EndIf
+			f.Data.DataTable.Create("dtINVENTORY_AUDIT")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "PART", "String", v.Global.sPart)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "DATE_AUDIT", "String", v.Local.sDATE_AUDIT)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "DATE_ACTION", "String", v.Local.sDATE_ACTION)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "AUDIT_TIME", "String", v.Local.sTIME_CHG)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "CODE_TRANSACTION", "String", "P18")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "REFERENCE_1", "String", "VALUE ONLY")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_ONHAND", "Float", v.Local.fOnBin)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_ONHAND", "Float", v.Local.fOnBin)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_INV_COST", "Float", v.Global.fCostOld)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_INV_COST", "Float", v.Global.fCostNew)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "BIN", "String", v.Local.sBin)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "QUANTITY", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "COST", "Float", v.Local.fCost)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "JOB_SEQ", "String", "000000")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "PRODUCT_LINE", "String", v.Local.sPL)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "AUDIT_PROGRAM", "String", v.Local.sPROGRAM)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "IGNORE_FOR_USAGE", "Boolean", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "AUDIT_USER", "String", v.Caller.User)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "MATL_COST", "Float", v.Local.fMATL_Cost)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_MATL", "Float", v.Global.fCostOld)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_MATL", "Float", v.Global.fCostNew)
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "COST_NOT_UPDATED", "Boolean", "0")
+			'default values
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "LABOR_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OVERHEAD_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OUTSIDE_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "FREIGHT_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OTHER_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "MATL_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "LABOR_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OVERHEAD_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OUTS_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OTH_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_LABR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_OVHD", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_OUTS", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_FREIGHT", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "OLD_OTHER", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_LABR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_OVHD", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_OUTS", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_FREIGHT", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "NEW_OTHER", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "DTL_KEY_SEQ", "Long", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "T10_FRGT", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_AUDIT", "FRGT_VAR", "Float", "0")
+			
+			
+			'INVENTORY_HIST
+			'**************
+			f.Intrinsic.Control.If(v.DataTable.dtINVENTORY_HIST.Exists)
+				f.Data.DataTable.Close("dtINVENTORY_HIST")
+			f.Intrinsic.Control.EndIf
+			
+			f.Data.DataTable.Create("dtINVENTORY_HIST")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DATE_ACCT_YR","String", v.Local.sACCT_YR)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DATE_ACCT_MO","String", v.Local.sACCT_MO)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "PART","String", v.Global.sPart)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DATE_HISTORY","String", v.Local.sDATE_HISTORY)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "INV_HIST_TIME","String", v.Local.INV_HIST_TIME)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "CODE_TRANSACTION","String", "P18")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "TRANSACTION_DESC","String", "VALUE ONLY")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_ONHAND", "Float", v.Local.fOnHand)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_ONHAND", "Float", v.Local.fOnHand)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_INV_COST", "Float", v.Global.fCostOld)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_INV_COST", "Float", v.Global.fCostNew)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "BIN", "String", v.Local.sBin)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "QUANTITY", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST", "Float", v.Local.fCost)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "SEQ", "String", "000000")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "PRODUCT_LINE", "String", v.Local.sPL)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DATE_ACTION", "String", v.Local.sDATE_ACTION)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "PROGRAM_A", "String", v.Local.sPROGRAM)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "IGNORE_FOR_USAGE", "Boolean", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "USERID", "String", v.Caller.User)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST_MATERIAL", "Float", v.Local.fMATL_Cost)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_MATL", "Float", v.Global.fCostOld)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_MATL", "Float", v.Global.fCostNew)
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST_NOT_UPD", "Boolean", "0")
+			'default values
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST_LABOR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "COST_OVERHEAD", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OUTS_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "FREIGHT_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OTHER_COST", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "MATL_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "LABR_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OVHD_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OUTS_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "FRGT_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OTH_VAR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_LABR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_OVHD", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_OUTS", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_FRGT", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "OLD_OTH", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_LABR", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_OVHD", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_OUTS", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_FRGT", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "NEW_OTH", "Float", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "DTL_KEY_SEQ", "Long", "0")
+			f.Data.DataTable.AddColumn("dtINVENTORY_HIST", "T10_FRGT", "Float", "0")
+			
+			f.Intrinsic.Control.For(v.Local.iCounter,0,v.DataTable.dtPARTBIN.RowCount--,1)
+				v.Local.fOnBin.Set(v.DataTable.dtPARTBIN(v.Local.iCounter).QUANTITY!FieldVal)
+				v.Local.sBin.Set(v.DataTable.dtPARTBIN(v.Local.iCounter).BIN!FieldValTrim)
+				f.Intrinsic.Math.Mult(v.Local.fOnBin, v.Local.fMATL_Cost, v.Local.fCost)
+				f.Intrinsic.Date.DateAdd("S", v.Local.iCounter,v.Ambient.Now,v.Local.dTemp)
+				f.Intrinsic.String.Format(v.Local.dTemp,"HHMMSSSS", v.Local.sTIME_CHG)
+				f.Intrinsic.String.Format(v.Local.dTemp,"HHMMSSSS", v.Local.INV_HIST_TIME)
+				
+				'insert record
+				f.Data.DataTable.AddRow("dtINVENTORY_AUDIT", "AUDIT_TIME",v.Local.sTIME_CHG, "NEW_ONHAND", v.Local.fOnBin, "OLD_ONHAND",v.Local.fOnBin, "COST",v.Local.fCost, "BIN",v.Local.sBin)
+				f.Data.DataTable.AddRow("dtINVENTORY_HIST", "INV_HIST_TIME",v.Local.sTIME_CHG, "NEW_ONHAND", v.Local.fOnBin, "OLD_ONHAND",v.Local.fOnBin, "COST",v.Local.fCost, "BIN",v.Local.sBin)
+			f.Intrinsic.Control.Next(v.Local.iCounter)
+			
+			f.Data.DataTable.SaveToDB("dtINVENTORY_AUDIT", "Con", "INVENTORY_AUDIT", "PART*!*AUDIT_TIME*!*BIN", 128)
+			f.Data.DataTable.SaveToDB("dtINVENTORY_HIST", "Con", "INVENTORY_HIST", "PART*!*INV_HIST_TIME*!*BIN", 128)
+			f.Data.DataTable.Close("dtINVENTORY_AUDIT")
+			f.Data.DataTable.Close("dtINVENTORY_HIST")
+			
+		f.Intrinsic.Control.EndIf
+	f.Intrinsic.Control.EndIf
+	'--------------------------------------------------
+	
+	f.ODBC.Connection!Con.Close
+	
+f.Intrinsic.Control.Catch
+	v.Global.bCostAudit.Set(False)
+	f.ODBC.Connection!Con.Close
+	f.Intrinsic.Control.CallSub(Catching)
+f.Intrinsic.Control.EndTry
+Program.Sub.InsertAUDIT_HIST_ALTCOST.End
+
+Program.Sub.Unload.Start
+f.Intrinsic.Control.End
+Program.Sub.Unload.End
+
+Program.Sub.Catching.Start
+	f.Intrinsic.UI.Msgbox(v.Ambient.ErrorDescription)
+Program.Sub.Catching.End
+
+Program.Sub.cmdUpdateCost_Click.Start
+f.Intrinsic.Control.Try
+	v.Local.sRet.Declare(String)
+	v.Local.sSQL.Declare(String)
+	v.Local.sLines.Declare(String)
+	v.Local.bInString.Declare(Boolean)
+	v.Local.bExists.Declare(Boolean)
+	v.Local.iCounter.Declare(Long)
+	v.Local.sTemp.Declare(String)
+	v.Local.sMessage.Declare(String)
+	v.Local.sSelectedOption.Declare(String)
+	
+	gui.FormSelectCost..Enabled(False)
+	
+	'Read file
+	'--------------------------------------------------
+	f.Intrinsic.UI.InvokeWaitDialog("Reading File...")
+	f.Automation.MSExcel.ReadSpreadsheet(v.Global.sFile, v.Local.sRet)
+	f.Intrinsic.String.Split(v.Local.sRet, "&^&", v.Local.sRet)
+	
+	'get rid of header
+	f.Intrinsic.String.Split(v.Local.sRet(0), "$!$", v.Local.sLines)
+	v.Local.sLines(0).Set("REMOVEDHEADER")
+	f.Intrinsic.String.Join(v.Local.sLines, "$!$", v.Local.sLines)
+	f.Intrinsic.String.Replace(v.Local.sLines, "REMOVEDHEADER$!$", "", v.Local.sLines)
+	
+	'create Dt and filter off bad data
+	f.Intrinsic.Control.If(v.DataTable.dtInvCostChange.Exists)
+		f.Data.DataTable.Close("dtInvCostChange")
+	f.Intrinsic.Control.EndIf
+	f.Data.DataTable.CreateFromString("dtInvCostChange", v.Local.sLines, "PART*!*PDESC*!*COST", "String*!*String*!*Float", "*!*", "$!$")
+	f.Data.DataView.Create("dtInvCostChange", "dvInvCostChange", 22,"PART<>''","")
+	f.Data.DataView.ToDataTable("dtInvCostChange", "dvInvCostChange", "dtCostChangeRef")
+	f.Data.DataView.Close("dtInvCostChange", "dvInvCostChange")
+	f.Data.DataTable.Close("dtInvCostChange")
+	'--------------------------------------------------
+	
+	'exit if no record
+	f.Intrinsic.Control.If(v.DataTable.dtCostChangeRef.RowCount,=,0)
+		f.Intrinsic.UI.Msgbox("No Record Found. Exit Program.")
+		f.Intrinsic.Control.End
+	f.Intrinsic.Control.EndIf
+	
+	'get selected option
+	'--------------------------------------------------
+	v.Local.sSelectedOption.Set(v.Screen.FormSelectCost!ddlOption.Value)
+	f.Intrinsic.Control.SelectCase(v.Local.sSelectedOption)
+		f.Intrinsic.Control.Case("Material Cost only")
+			v.Global.bUpdateAltCost.Set(False)
+			v.Global.bUpdateMatCost.Set(True)
+		f.Intrinsic.Control.Case("Alt Cost only")
+			v.Global.bUpdateAltCost.Set(True)
+			v.Global.bUpdateMatCost.Set(False)
+		f.Intrinsic.Control.CaseElse
+			v.Global.bUpdateAltCost.Set(True)
+			v.Global.bUpdateMatCost.Set(True)
+	f.Intrinsic.Control.EndSelect
+	'--------------------------------------------------
+	
+	
+	'Apply cost change
+	'--------------------------------------------------
+	f.Intrinsic.UI.ChangeWaitStatus("Applying Cost Change...")
+	
+	f.Intrinsic.Control.For(v.Local.iCounter, 0, v.DataTable.dtCostChangeRef.RowCount--,1)
+	
+		'Gather info and validate
+		v.Global.sPart.Set(v.DataTable.dtCostChangeRef(v.Local.iCounter).PART!FieldValTrim)
+		v.Global.fCostNew.Set(v.DataTable.dtCostChangeRef(v.Local.iCounter).COST!FieldVal)
+		
+		'skip if PART starts with T,R,M
+		f.Intrinsic.String.Left(v.Global.sPart,1,v.Local.sTemp)
+		f.Intrinsic.Control.If(v.Local.sTemp,=,"T","OR",v.Local.sTemp,=,"R",v.Local.sTemp,=,"M")
+			f.Intrinsic.Control.Next(v.Local.iCounter)
+		f.Intrinsic.Control.EndIf
+		
+		
+		v.Global.bValidPart.Set(True)
+		f.Intrinsic.Control.CallSub(GetOldCost)
+		f.Intrinsic.Control.If(v.Global.bValidPart,=,False)
+			'Exit if cannot get old cost
+			f.Intrinsic.String.Build("There is error in finding cost for PART#{0}. Please check data and try again.", v.Global.sPart, v.Local.sMessage)
+			f.Intrinsic.UI.Msgbox(v.Local.sMessage)
+			f.Intrinsic.Control.CallSub(Unload)
+		f.Intrinsic.Control.EndIf
+		
+		
+'		update tables
+		v.Global.bCostUpdate.Set(True)
+		f.Intrinsic.Control.CallSub(UpdateINVMSTR_INVCOST)
+		f.Intrinsic.Control.If(v.Global.bCostUpdate,=,False)
+			f.Intrinsic.String.Build("There is error in updating cost for PART#{0}. Please check data and try again.", v.Global.sPart, v.Local.sMessage)
+			f.Intrinsic.UI.Msgbox(v.Local.sMessage)
+			f.Intrinsic.Control.CallSub(Unload)
+		f.Intrinsic.Control.EndIf
+		
+		'audit tables
+		v.Global.bCostAudit.Set(True)
+		f.Intrinsic.Control.CallSub(InsertAUDIT_HIST_ALTCOST)
+		f.Intrinsic.Control.If(v.Global.bCostAudit,=,False)
+			f.Intrinsic.String.Build("There is error in writing audit for PART#{0}. Please check data and try again.", v.Global.sPart, v.Local.sMessage)
+			f.Intrinsic.UI.Msgbox(v.Local.sMessage)
+			f.Intrinsic.Control.CallSub(Unload)
+		f.Intrinsic.Control.EndIf
+		
+	f.Intrinsic.Control.Next(v.Local.iCounter)
+	'--------------------------------------------------
+
+	f.Intrinsic.UI.Msgbox("Completed!")
+	f.Intrinsic.Control.CallSub(Unload)
+f.Intrinsic.Control.Catch
+	f.Intrinsic.UI.Msgbox(v.Ambient.ErrorDescription)
+	f.Intrinsic.Control.CallSub(Unload)
+f.Intrinsic.Control.EndTry
+Program.Sub.cmdUpdateCost_Click.End
+
+Program.Sub.FormSelectCost_UnLoad.Start
+Program.Sub.FormSelectCost_UnLoad.End
+
+Program.Sub.Comments.Start
+${$5$}$2.0.0.0$}$2
+${$6$}$nle$}$20230629085237823$}$kjzCRYkA6UEoRnCwndYnRfFTHMiOALmY39P58pXR9JlCX0ljGL9YFRLzxc/kr2MH
+Program.Sub.Comments.End
